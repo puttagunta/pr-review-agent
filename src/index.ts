@@ -28,7 +28,7 @@ async function main() {
   const repo = process.env.REPO_NAME ?? "";
 
   if (!owner || !repo) {
-    throw new Error("Set REPO_OWNER and REPO_NAME in .env");
+    throw new Error("Looks like you missed setting REPO_OWNER and REPO_NAME in .env");
   }
 
   // Simulate Copilot calling the fetch_pr tool
