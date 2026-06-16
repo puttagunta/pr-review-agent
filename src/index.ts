@@ -4,8 +4,30 @@ dotenv.config();
 import { fetchPr } from "../tools/fetch-pr";
 import { fetchPrSchema } from "../tools/fetch-pr.schema";
 import type { FetchPrInput } from "../tools/fetch-pr.schema";
+import { lintCheck } from "../skills/lint-check";
+import { securityScan } from "../skills/security-scan";
+import type { FetchPrOutput } from "../tools/fetch-pr";
 
-// Registry: maps tool name → { schema, handler }
+export type FullReviewOutput = {
+  pr: FetchPrOutput;
+  lint: Awaited<ReturnType<typeof lintCheck>>;
+  security: Awaited<ReturnType<typeof securityScan>>;
+};
+
+// Runs the full review pipeline: fetch → lint + scan (parallel) → combine
+export async function runFullReview(input: FetchPrInput): Promise<FullReviewOutput> {
+  console.log(`Fetching PR #${input.pr_number}...`);
+  const pr = await fetchPr(input);
+
+  console.log(`Running lint and security scan in parallel...`);
+  const [lint, security] = await Promise.all([
+    lintCheck(pr),
+    securityScan(pr),
+  ]);
+
+  return { pr, lint, security };
+}
+
 const toolRegistry = {
   fetch_pr: {
     schema: fetchPrSchema,
@@ -22,23 +44,30 @@ export async function dispatchTool(
   return tool.handler(args);
 }
 
-// --- Local test harness (remove when wiring to Copilot runtime) ---
+// --- Test harness ---
 async function main() {
   const owner = process.env.REPO_OWNER ?? "";
-  const repo = process.env.REPO_NAME ?? "";
+  const repo  = process.env.REPO_NAME  ?? "";
 
-  if (!owner || !repo) {
-    throw new Error("Set REPO_OWNER and REPO_NAME in .env");
-  }
+  if (!owner || !repo) throw new Error("Set REPO_OWNER and REPO_NAME in .env");
 
-  // Simulate Copilot calling the fetch_pr tool
-  const result = await dispatchTool("fetch_pr", {
-    owner,
-    repo,
-    pr_number: 1,        // ← change to a real open PR number in your repo
-  });
+  const result = await runFullReview({ owner, repo, pr_number: 1 });
 
-  console.log(JSON.stringify(result, null, 2));
+  console.log("\n=== PR ===");
+  console.log(`${result.pr.title} by @${result.pr.author}`);
+  console.log(`Files changed: ${result.pr.files.length}`);
+
+  console.log("\n=== Lint ===");
+  console.log(`Passed: ${result.lint.passed} | Errors: ${result.lint.errorCount} | Warnings: ${result.lint.warningCount}`);
+  result.lint.issues.slice(0, 5).forEach((i) =>
+    console.log(`  [${i.severity}] ${i.filename}:${i.line} — ${i.message} (${i.rule})`)
+  );
+
+  console.log("\n=== Security ===");
+  console.log(`Passed: ${result.security.passed} | Flags: ${result.security.flags.length}`);
+  result.security.flags.forEach((f) =>
+    console.log(`  [${f.severity}] ${f.filename}:${f.line} — ${f.detail}`)
+  );
 }
 
 main().catch(console.error);
